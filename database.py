@@ -18,7 +18,7 @@ class DataBase:
                 cursor = db.cursor()
                 cursor.execute("SELECT blacklisted FROM Clients WHERE id == ?", [user_id])
                 result = cursor.fetchone()
-                return result[0] == '1'
+                return result[0] == '1' if result is not None else False
         except sqlite3.Error as e:
             print(f"Произошла ошибка: {e}")
             return False
@@ -32,7 +32,21 @@ class DataBase:
                 cursor = db.cursor()
                 cursor.execute("SELECT id FROM Admins WHERE id == ?", [user_id])
                 result = cursor.fetchone()
-                return result[0] is not None
+                return result[0] == '1' if result is not None else False
+        except sqlite3.Error as e:
+            print(f"Произошла ошибка: {e}")
+            return False
+
+    def is_cleaner(self, user_id):
+        """проверяем является ли клинером
+        :param user_id: id пользователя
+        :return: True - клинер, False - не клинер"""
+        try:
+            with sqlite3.connect(self.db_file) as db:
+                cursor = db.cursor()
+                cursor.execute("SELECT id FROM Staff WHERE id == ?", [user_id])
+                result = cursor.fetchone()
+                return result[0] == '1' if result is not None else False
         except sqlite3.Error as e:
             print(f"Произошла ошибка: {e}")
             return False
@@ -85,7 +99,7 @@ class DataBase:
         try:
             with sqlite3.connect(self.db_file) as db:
                 cursor = db.cursor()
-                cursor.execute("INSERT INTO Clients(id, name, contact_info, address) VALUES (?, ?, ?, ?)", client_data)
+                cursor.execute("INSERT INTO Clients(id, name, phone, address) VALUES (?, ?, ?, ?)", client_data)
                 return cursor.rowcount == 1
         except sqlite3.Error as e:
             print(f"Ошибка при выполнении регистраиции: {e}")
@@ -170,13 +184,13 @@ class DataBase:
 
     def correct_client_data(self, client_data, client_id):
         """изменение данных клиента
-        :param client_data: [name, contact_info, address]
+        :param client_data: [name, phone, address]
         :param client_id: id клиента
         :return:True если изменения внесены успешно иначе False"""
         try:
             with sqlite3.connect(self.db_file) as db:
                 cursor = db.cursor()
-                cursor.execute("""UPDATE Clients SET name = ?, contact_info = ?, address = ? WHERE id = ?""",
+                cursor.execute("""UPDATE Clients SET name = ?, phone = ?, address = ? WHERE id = ?""",
                                [*client_data, client_id])
                 return cursor.rowcount == 1
         except sqlite3.Error as e:
