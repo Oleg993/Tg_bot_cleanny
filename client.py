@@ -25,15 +25,13 @@ text = '''Базовая стоимость уборки объекта сост
 basic_price = 65
 
 user_data = {}
+new_cleaner = []
 orders = {}
 
 # admin data
 admin_btns = ['Нераспределенные заявки', 'Заявки в процессе выполнения', 'График работы клинеров', 'Склад', 'Клинеры',
-              'Жалобы от клиентов', 'Отзывы', 'Стат. за вчерашний день', 'Стат. по месяцам', 'Заблокировать клиента']
+              'Отзывы', 'Стат. за вчерашний день', 'Стат. по месяцам', 'Заблокировать клиента']
 
-id = 1924589846
-
-# db().add_admin(1924589846, 'Олег', '+37529 821 89 14')
 
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -377,7 +375,11 @@ def admin_markup():
     """:return: Возвращает кнопки для панели админа"""
     markup = InlineKeyboardMarkup()
     for btn in admin_btns:
-        markup.add(InlineKeyboardButton(btn, callback_data=btn))
+        if btn == 'График работы клинеров':
+            link = f'https://docs.google.com/spreadsheets/d/1IQv8m_q5zWAPLzvX33kUVwcOHvH2ie7w/edit?usp=sharing&ouid=103860963669432207618&rtpof=true&sd=true'
+            markup.add(InlineKeyboardButton(btn, url=link))
+        else:
+            markup.add(InlineKeyboardButton(btn, callback_data=btn))
     return markup
 
 
@@ -391,6 +393,98 @@ def unsigned_orders():
     for idx, order in enumerate(free_orders, start=1):
         markup.add(InlineKeyboardButton(f"{idx}) {order[2]}", callback_data=f'free_order{order[0]}'))
     markup.add(InlineKeyboardButton('Назад', callback_data='admin_back'))
+    return markup
+
+
+def available_cleaners(status):
+    """:return: Возвращает кнопки доступных клинеров"""
+    markup = InlineKeyboardMarkup()
+    cleaners = db().get_list_of_cleaners()
+    if not cleaners:
+        cleaners = 'Клинеры отсутствуют!'
+        return cleaners
+    else:
+        cleaners = [list(i) for i in db().get_list_of_cleaners(status)]
+    if not status:
+        for idx, cleaner in enumerate(cleaners, start=1):
+            markup.add(InlineKeyboardButton(f"{idx}. {cleaner[1]}", callback_data=f"clnr{cleaner[0]}"))
+        row = []
+        for btn in ['Добавить клинера', 'Удалить клинера']:
+            row.append(InlineKeyboardButton(btn, callback_data=btn))
+        markup.row(*row)
+        markup.add(InlineKeyboardButton('Меню', callback_data='admin_back'))
+    elif status == 1:
+        for idx, cleaner in enumerate(cleaners, start=1):
+            markup.add(InlineKeyboardButton(f"{idx}. {cleaner[1]}", callback_data=f"clnr{cleaner[0]}"))
+    return markup
+
+
+def orders_in_run():
+    """:return: Кнопки с заявками в процессе исполнения"""
+    markup = InlineKeyboardMarkup()
+    current_orders = db().get_orders_in_run()
+    if not current_orders:
+        current_orders = 'Нет заявок в процессе исполнения!'
+        return current_orders
+    for idx, ord in enumerate(current_orders, start=1):
+        markup.add(InlineKeyboardButton(f"{idx}) Заявка № {ord[0]}, {ord[3]}", callback_data=f'current_order{ord[0]}'))
+    markup.add(InlineKeyboardButton('Назад', callback_data='admin_back'))
+    return markup
+
+
+def cleaners_markup(callback=None):
+    """:return: Кнопки с клинерами для удаления или просмотра отзывов"""
+    markup = InlineKeyboardMarkup()
+    cleaners = db().get_list_of_cleaners()
+    if not cleaners:
+        cleaners = 'Клинеры отсутствуют!'
+        return cleaners
+    else:
+        cleaners = [list(i) for i in db().get_list_of_cleaners()]
+    if callback == 'reviews':
+        for idx, cleaner in enumerate(cleaners, start=1):
+            markup.add(InlineKeyboardButton(f"{idx}. {cleaner[1]}", callback_data=f"{cleaner[0]}{callback}"))
+        markup.add(InlineKeyboardButton('Назад', callback_data='admin_back'))
+    else:
+        for idx, cleaner in enumerate(cleaners, start=1):
+            markup.add(InlineKeyboardButton(f"{idx}. {cleaner[1]}", callback_data=f"delclnr{cleaner[0]}"))
+        markup.add(InlineKeyboardButton('Назад', callback_data='Добавить клинера cancel'))
+    return markup
+
+
+def add_new_cleaner(data):
+    """:return: Добавление нового клинера через Админа"""
+    chat_id = data.from_user.id
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton('Отмена', callback_data='Добавить клинера cancel'))
+
+    if len(new_cleaner) < 3:
+        if len(new_cleaner) == 0:
+            new_cleaner.append(data.text)
+            bot.send_message(chat_id, "Отлично! Теперь введите имя клинера:", reply_markup=markup)
+            bot.register_next_step_handler(data, add_new_cleaner)
+        elif len(new_cleaner) == 1:
+            new_cleaner.append(data.text)
+            bot.send_message(chat_id, "Отлично! Теперь введите номер телефона:", reply_markup=markup)
+            bot.register_next_step_handler(data, add_new_cleaner)
+        elif len(new_cleaner) == 2:
+            new_cleaner.append(data.text)
+            all_data = [new_cleaner[0], new_cleaner[1], new_cleaner[2], 0, 1]
+            db().add_cleaner(*all_data)
+            new_cleaner.clear()
+            return bot.send_message(chat_id, "Новый клинер добавлен!", reply_markup=available_cleaners(0))
+
+
+def cleaner_reviews(cleaner_id):
+    """:return: Кнопки с заявками клинера"""
+    markup = InlineKeyboardMarkup()
+    orders_from_cleaner = db().get_cleaner_orders(cleaner_id)
+    if not orders_from_cleaner:
+        cleaners = 'Исполненные заявки отсутствуют!'
+        return cleaners
+    for idx, review in enumerate(orders_from_cleaner, start=1):
+        markup.add(InlineKeyboardButton(f"{idx}. {review[1]}", callback_data=f"{orders_from_cleaner[0]}review_card"))
+        markup.add(InlineKeyboardButton('Назад', callback_data='admin_back'))
     return markup
 
 
@@ -650,7 +744,6 @@ def client_panel(call):
 Ваши контактные данные:\n{name}\nТелефон: {phone}\nАдрес: {address}""", reply_markup=markup)
 
     if call.data == 'finish_order':
-        print(orders[user_id])
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton('Меню', callback_data='menu'))
         order_date = datetime.today().strftime("%d.%m.%Y")
@@ -658,11 +751,11 @@ def client_panel(call):
         date_time_for_order = f"{orders[user_id]['date']}, {orders[user_id]['selected_time']}"
         address = show_address(user_id)
         client_id = user_id
-        staff_id = None
+        staff_id = 'Еще не назначен'
         room_count = orders[user_id]['room_number']
         bathroom_count = orders[user_id]['bath_number']
         def_values = {'fridge': 0, 'stove': 0, 'cabinets': 0, 'dishes': 0, 'microwave': 0, 'clothes': 0,
-                          'windows': 0, 'balcony': 0}
+                      'windows': 0, 'balcony': 0}
         for key in def_values:
             if key in orders[user_id]:
                 def_values[key] = orders[user_id][key]
@@ -687,7 +780,10 @@ def client_panel(call):
 
     if call.data[:8] == 'order_id':
         order_data = db().get_order(int(call.data[8:]))
-        comment = db().get_comment(order_data[-1])
+        if order_data[0] != 'Уборка завершена':
+            comment = 'Отзыв отсутствует.'
+        else:
+            comment = db().get_comment(order_data[-2])
         if not comment:
             comment = 'Отзыв отсутствует.'
 
@@ -698,7 +794,7 @@ def client_panel(call):
         else:
             markup.add(InlineKeyboardButton('Назад', callback_data='Мои заказы'))
         bot.send_message(chat, f"""Заказ № {call.data[8:]}\nДата: {order_data[1]} часов\nАдрес: {order_data[2]}\n
-Клинер: {order_data[3]}\nСтатус исполнения: {order_data[0]}\nОбщая стоимоcть:{order_data[4]}
+Клинер: {order_data[-1]}\nСтатус исполнения: {order_data[0]}\nОбщая стоимоcть:{order_data[3]}
 \nОтзыв:\n{comment}""", reply_markup=markup)
 
     if call.data[:13] == 'client_review':
@@ -733,16 +829,120 @@ def client_panel(call):
 
     if call.data[:10] == 'free_order':
         order_id = int(call.data[10:])
-        ord_data = db().get_free_order_data(order_id)
+        ord_data = list(db().get_free_order_data(order_id))
         client_data = db().get_client_data(ord_data[5])
-        client = '\n'.join(str(item) for item in client_data)
-        bot.send_message(chat, f"""Номер заказа: {ord_data[0]}\nКогда поступил заказ{ord_data[1]}\nСтатус{ord_data[2]}
-Дата начала уборки:{ord_data[3]}\nАдрес: {ord_data[4]}\nКлиент:\n{client}\nКомнаты: {ord_data[6]}\nСан.узлы: {ord_data[7]}
-Внутри холодильника: {ord_data[7]}\nВнутри духовки: {ord_data[8]}\nВнутри духовки: {ord_data[8]}
-Внутри кухонных шкафов: {ord_data[9]}\nПомоем посуду: {ord_data[10]}\nВнутри микроволновки: {ord_data[11]}
-Погладим белье: {ord_data[12]}\nПомоем окна: {ord_data[13]}\nУберем на балконе: {ord_data[14]}""")
+        client = '\n'.join(str(item) for item in list(client_data)[1:3])
+        if ord_data[17] is None:
+            ord_data[17] = '0'
+        bot.send_message(chat, f"""Номер заказа: {ord_data[0]}\nЦена: {ord_data[18]}\nСкидка: {ord_data[17]} %
+Дата поступления заказа: {ord_data[1]}\nСтатус: {ord_data[2]}\nДата начала уборки: {ord_data[3]}\nАдрес: {ord_data[4]}
+Клиент:\n{client}\nКомнаты: {ord_data[7]}\nСан.узлы: {ord_data[8]}\nВнутри холодильника: {ord_data[9]}
+Внутри духовки: {ord_data[10]}\nВнутри кухонных шкафов: {ord_data[11]}\nПомоем посуду: {ord_data[12]}
+Внутри микроволновки: {ord_data[13]}\nПогладим белье: {ord_data[14]}\nПомоем окна: {ord_data[15]}
+Уберем на балконе: {ord_data[16]}""", reply_markup=available_cleaners(1))
+
+    if call.data[:7] == 'cleaner':
+        db().make_cleaner_to_order(call.data[7:])
+        free_orders_markup = unsigned_orders()
+        if isinstance(free_orders_markup, str):
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton('Назад', callback_data='admin_back'))
+            bot.send_message(chat, free_orders_markup, reply_markup=markup)
+        else:
+            bot.send_message(chat, f"Нераспределенные заявки:\n\n", reply_markup=free_orders_markup)
+
+    if call.data == 'Заявки в процессе выполнения':
+        current_orders_markup = orders_in_run()
+        if isinstance(current_orders_markup, str):
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton('Назад', callback_data='admin_back'))
+            bot.send_message(chat, current_orders_markup, reply_markup=markup)
+        else:
+            bot.send_message(chat, f"Заявки в процессе выполнения:\n\n", reply_markup=current_orders_markup)
+
+    if call.data[:13] == 'current_order':
+        order_id = int(call.data[13:])
+        order = db().get_order(order_id)
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton('Назад', callback_data='Заявки в процессе выполнения'))
+
+        bot.send_message(chat, f"""Номер заявки: {order[4]}\nЦена: {order[3]}\nДата и время начала: {order[1]}
+Статус: {order[0]}\nКлинер: {order[5]}""", reply_markup=markup)
+
+    if call.data == 'Клинеры':
+        cleaner_for_all = available_cleaners(0)
+        if isinstance(cleaner_for_all, str):
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton('Добавить клинера', callback_data='Добавить клинера'))
+            markup.add(InlineKeyboardButton('Назад', callback_data='admin_back'))
+            bot.send_message(chat, cleaner_for_all, reply_markup=markup)
+        else:
+            bot.send_message(chat, "Клинеры", reply_markup=cleaner_for_all)
+
+    if call.data == 'Добавить клинера':
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton('Отмена', callback_data='Добавить клинера cancel'))
+        bot.send_message(chat, "Введите id нового клинера", reply_markup=markup)
+        bot.register_next_step_handler(call.message, add_new_cleaner)
+
+    if call.data == 'Добавить клинера cancel':
+        new_cleaner.clear()
+        bot.clear_step_handler_by_chat_id(chat)
+        cleaner_for_all = available_cleaners(0)
+        if isinstance(cleaner_for_all, str):
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton('Добавить клинера', callback_data='Добавить клинера'))
+            markup.add(InlineKeyboardButton('Назад', callback_data='admin_back'))
+            bot.send_message(chat, cleaner_for_all, reply_markup=markup)
+        else:
+            bot.send_message(chat, "Клинеры", reply_markup=cleaner_for_all)
+
+    if call.data == 'Удалить клинера':
+        cleaners_del = cleaners_markup()
+        if isinstance(cleaners_del, str):
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton('Назад', callback_data='Добавить клинера cancel'))
+            bot.send_message(chat, cleaners_del, reply_markup=markup)
+        else:
+            bot.send_message(chat, "Нажмите на клинера для удаления", reply_markup=cleaners_del)
+
+    if call.data[:7] == 'delclnr':
+        db().delete_cleaner(int(call.data[7:]))
+        cleaners_del = cleaners_markup()
+        if isinstance(cleaners_del, str):
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton('Назад', callback_data='Добавить клинера cancel'))
+            bot.send_message(chat, cleaners_del, reply_markup=markup)
+        else:
+            bot.send_message(chat, "Нажмите на клинера для удаления", reply_markup=cleaners_del)
+
+    if call.data == 'Отзывы':
+        bot.send_message(chat, "Выберите клинера, чтобы посмотреть его отзывы", reply_markup=cleaners_markup('reviews'))
+
+    if call.data[-7:] == 'reviews':
+        cleaner_id = call.data[:-7]
+        bot.send_message(chat, "Выберите заявку:", reply_markup=cleaner_reviews(cleaner_id))
+
+    if call.data[-11:] == 'review_card':
+        order_id = int(call.data[1:-33])
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton('Удалить отзыв', callback_data='delete_review'))
+        markup.add(InlineKeyboardButton('Назад', callback_data='admin_back'))
+        card = db().get_cleaner_review_card(order_id)
+        bot.send_message(chat, f"""Карточка заказа № {order_id}:\nКлиент: {card[0]}\nТелефон: {card[1]}
+Адрес:\n{card[2]}\n\nОтзыв:\n{card[3]}""", reply_markup=markup)
+
+        # ЗАКОНЧИЛ ПОСЛЕ СОЗДАНИЯ КНОПКИ УДАЛИТЬ ОТЗЫВ, КНОПКА НЕ ОБРАБОТАНА
 
 
 print('ready')
 bot.polling(none_stop=True)
+
+
+# db().add_admin(1924589846, 'Олег', '+37529 821 89 14')
+# db().add_cleaner(111, 'Долматов Алексей', "+37529 171 83 54", 18, 1)
+# db().add_cleaner(222, 'Вакуленко Василий', "+37533 374 32 97", 22, 1)
+# db().add_cleaner(333, 'Киркоров Филипп', "+37544 876 83 23", 24, 1)
+# db().add_cleaner(444, 'Михайлов Станислав', "+37529 573 11 35", 17, 1)
+# db().add_cleaner(555, 'Лепс Григорий', "+37529 221 37 90", 5, 1)
 
