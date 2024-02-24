@@ -390,7 +390,7 @@ class DataBase:
         try:
             with sqlite3.connect(self.db_file) as db:
                 cursor = db.cursor()
-                cursor.execute("SELECT * FROM Orders WHERE status != ?", ['Уборка завершена'])
+                cursor.execute("SELECT * FROM Orders WHERE status = ?", ['Клинер назначен'])
                 result = cursor.fetchall()
                 return False if len(result) == 0 else result
         except sqlite3.Error as e:
