@@ -1,3 +1,4 @@
+from datetime import date
 import sqlite3
 import telebot
 
@@ -46,7 +47,7 @@ class DataBase:
                 cursor = db.cursor()
                 cursor.execute("SELECT id FROM Staff WHERE id == ?", [user_id])
                 result = cursor.fetchone()
-                return result[0] == '1' if result is not None else False
+                return True if result is not None else False
         except sqlite3.Error as e:
             print(f"Произошла ошибка: {e}")
             return False
@@ -182,14 +183,15 @@ class DataBase:
     def add_data_to_orders(self, data):
         """добавление данных в Orders
         :param data: [order_date, status, address, client_id, staff_id, discount, room_count, bathroom_count,
-        other_details]
+        other_details, order_time]
         :return: True - добавлено, False - нет"""
         try:
             with sqlite3.connect(self.db_file) as db:
                 cursor = db.cursor()
                 cursor.execute("""INSERT INTO Orders (order_date, status, date_time, address, client_id, staff_id,
                 room_count, bathroom_count, fridge, stove, cabinets, dishes, microwave, clothes, windows, balcony, 
-                discount, price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", [*data])
+                discount, price, order_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                               [*data])
                 return cursor.rowcount > 0
         except sqlite3.Error as e:
             print(f"Не удалось добавить данные: {e}")
@@ -314,20 +316,22 @@ class DataBase:
 
     # cleaner
 
-    def add_cleaner(self, user_id, name, phone, worked_hours_current_week, work_schedule):
+    def add_cleaner(self, user_id, name, phone, worked_hours_current_week, worked_hours_day, work_schedule):
         """Доавление клинера
         :param user_id: admin id
         :param name: admin name
         :param phone: admin phone
         :param worked_hours_current_week: отработано часов в текущей неделе
+        :param worked_hours_day: отработано часов за день
         :param work_schedule: работает сегодня или нет
         :return:True если добавлен успешно"""
         try:
             with sqlite3.connect(self.db_file) as db:
                 cursor = db.cursor()
-                cursor.execute("""INSERT INTO Staff(id, name, contact_info, worked_hours_current_week, work_schedule)
-                               VALUES (?, ?, ?, ?, ?)""",
-                               [user_id, name, phone, worked_hours_current_week, work_schedule])
+                cursor.execute("""INSERT INTO Staff(id, name, contact_info, worked_hours_current_week, 
+                worked_hours_day, work_schedule)
+                               VALUES (?, ?, ?, ?, ?, ?)""",
+                               [user_id, name, phone, worked_hours_current_week, worked_hours_day, work_schedule])
                 return cursor.rowcount == 1
         except sqlite3.Error as e:
             print(f"Ошибка при добавлении клинера: {e}")
@@ -351,20 +355,33 @@ class DataBase:
             print(f"Не удалось загрузить список клинеров: {e}")
             return False
 
-    def make_cleaner_to_order(self, cleaner_id):
+    def make_cleaner_to_order(self, order_id, cleaner_id, order_time):
         """возвращает Назначает уборщика на заявку
         :param cleaner_id: id клинера
+        :param order_id: id заявки
+        :param order_time: время исполнения заказа
         :return: True - назначен, False - нет"""
         try:
             with sqlite3.connect(self.db_file) as db:
                 cursor = db.cursor()
-                cursor.execute("UPDATE Orders SET staff_id = ?", [cleaner_id])
+                cursor.execute("UPDATE Orders SET staff_id = ? WHERE id = ?", [cleaner_id, order_id])
                 if cursor.rowcount > 0:
-                    cursor.execute("UPDATE Staff SET work_schedule = ? WHERE id = ?", [0, cleaner_id])
-                    cursor.execute("UPDATE Orders SET status = ? WHERE staff_id = ?", ['Клинер назначен', cleaner_id])
-                    return cursor.rowcount > 0
+                    cursor.execute("SELECT worked_hours_day, worked_hours_current_week FROM Staff WHERE id = ?",
+                                   [cleaner_id])
+                    hours_day = cursor.fetchone()
+                    if int(hours_day[0]) > 7 or int(hours_day[1]) > 37:
+                        cursor.execute("UPDATE Staff SET work_schedule = ? WHERE id = ?", [0, cleaner_id])
+                        cursor.execute("UPDATE Orders SET status = ? WHERE staff_id = ?", ['Клинер назначен', cleaner_id])
+                        return cursor.rowcount > 0
+                    else:
+                        new_hours_day = int(hours_day[0]) + int(order_time)
+                        new_hours_week = int(hours_day[1]) + int(order_time)
+                        cursor.execute("UPDATE Staff SET worked_hours_day = ?, worked_hours_current_week = ? WHERE id = ?",
+                                       [new_hours_day, new_hours_week, cleaner_id])
+                        cursor.execute("UPDATE Orders SET status = ? WHERE staff_id = ?", ['Клинер назначен', cleaner_id])
+                        return cursor.rowcount > 0
         except sqlite3.Error as e:
-            print(f"Не удалось загрузить список клинеров: {e}")
+            print(f"Не удалось назначить клинера: {e}")
             return False
 
     def get_orders_in_run(self):
@@ -387,7 +404,6 @@ class DataBase:
             with sqlite3.connect(self.db_file) as db:
                 cursor = db.cursor()
                 cursor.execute("DELETE FROM Staff WHERE id= ?", [cleaner_id])
-                result = cursor.fetchall()
                 return cursor.rowcount > 0
         except sqlite3.Error as e:
             print(f"Не удалось удалить клинера: {e}")
@@ -408,35 +424,216 @@ class DataBase:
 
     def get_cleaner_review_card(self, order_id):
         """возвращает по конкретному отзыву
-          :return: Список [(id, date_time), (id, date_time)]"""
+          :return: Список [Clients.name, Clients.phone, Clients.address, Reviews.review_text, Orders.staff_id]"""
         try:
             with sqlite3.connect(self.db_file) as db:
                 cursor = db.cursor()
-                cursor.execute("""SELECT Clients.name, Clients.phone, Clients.address, Reviews.review_text
+                cursor.execute("SELECT review_text FROM Reviews WHERE order_id = ?", [order_id])
+                review_text = cursor.fetchone()
+                cursor.execute("""SELECT Clients.name, Clients.phone, Clients.address, Orders.staff_id
                 FROM Orders
-                JOIN Clients ON Orders.client_id = Clients.id
-                JOIN Reviews ON Orders.id = Reviews.order_id
+                JOIN Clients ON Orders.client_id = Clients.id 
                 WHERE Orders.id = ?""", [order_id])
-                result = cursor.fetchone()
-                return False if len(result) == 0 else result
+                result = list(cursor.fetchone())
+                if review_text:
+                    result.append(review_text[0])
+                else:
+                    result.append('Коментарий отсутствует')
+                return False if result is None else result
         except sqlite3.Error as e:
             print(f"Не удалось загрузить список исполненных клинером заявок: {e}")
             return False
 
+    def delete_review(self, order_id):
+        """удаляет конкретный отзыв
+        :param order_id - id заказа
+        :return: True - удален, False - нет"""
+        try:
+            with sqlite3.connect(self.db_file) as db:
+                cursor = db.cursor()
+                cursor.execute("DELETE FROM Reviews WHERE order_id= ?", [order_id])
+                return cursor.rowcount > 0
+        except sqlite3.Error as e:
+            print(f"Не удалось удалить отзыв: {e}")
+            return False
 
+    def get_clients_list(self):
+        """возвращает список клиентов текстом
+        :return: Список [(id, name, address)]"""
+        try:
+            with sqlite3.connect(self.db_file) as db:
+                cursor = db.cursor()
+                cursor.execute("SELECT id, name, phone, blacklisted FROM Clients")
+                result = cursor.fetchall()
+                clients = [f'ID: {item[0]}, {item[1]}, {"-- Не заблокирован" if item[3] == 0 else "-- Заблокирован"}'
+                           for item in result]
+                result = '\n'.join(clients)
+                return False if len(result) == 0 else result
+        except sqlite3.Error as e:
+            print(f"Не удалось загрузить список клиентов: {e}")
+            return False
 
+###############################
+    def add_client(self, user_id, name, phone, address):
+        """Добавление клиента
+        :param user_id: id клиента
+        :param name: имя клиента
+        :param phone:  телефон клиента
+        :param address:  адресс клиента
+        :return:True если добавлен успешно"""
+        try:
+            with sqlite3.connect(self.db_file) as db:
+                cursor = db.cursor()
+                cursor.execute("INSERT INTO Clients(id, name, phone, address, blacklisted) VALUES (?, ?, ?, ?, ?)",
+                               [user_id, name, phone, address, 0])
+                return cursor.rowcount == 1
+        except sqlite3.Error as e:
+            print(f"Ошибка при добавлении клиента: {e}")
+            return False
 
+    def delll(self, cl_id):
+        with sqlite3.connect(self.db_file) as db:
+            cursor = db.cursor()
+            cursor.execute("DELETE FROM Clients WHERE id= ?", [cl_id])
+            return cursor.rowcount > 0
+###############################
 
+    def block_client(self, client_id):
+        """изменяет статус клиента blacklisted 0/1
+        :param client_id: id клиента
+        :return: True - выполнено, False - нет"""
+        try:
+            with sqlite3.connect(self.db_file) as db:
+                cursor = db.cursor()
+                cursor.execute("SELECT blacklisted FROM Clients WHERE id = ?", [client_id])
+                result = cursor.fetchone()
+                if result is not None:
+                    current_status = result[0]
+                    new_status = 1 if current_status == 0 else 0
+                    cursor.execute("UPDATE Clients SET blacklisted = ? WHERE id = ?", [new_status, client_id])
+                    return cursor.rowcount > 0
+        except sqlite3.Error as e:
+            print(f"Не удалось заблокировать/разблокировать клиента: {e}")
+            return False
 
+    def orders_for_cleaner(self, cleaner_id):
+        """возвращает список текущих заявок клинера
+        :param cleaner_id: id клинера
+        :return: Список заявок[(id, date_time), (id, date_time)]"""
+        try:
+            with sqlite3.connect(self.db_file) as db:
+                cursor = db.cursor()
+                cursor.execute("SELECT id, date_time FROM Orders WHERE status != ? AND staff_id = ?",
+                               ['Уборка завершена', cleaner_id])
+                cleaner_orders_all = [list(i) for i in cursor.fetchall()]
+                result = []
+                for i in cleaner_orders_all:
+                    if i[1].split(', ')[0] == date.today().strftime('%d.%m.%Y'):
+                        result.append(i)
+                return False if len(result) == 0 else result
+        except sqlite3.Error as e:
+            print(f"Не удалось загрузить список текущих заявок клинера: {e}")
+            return False
 
+    def get_client_id(self, order_id):
+        """возвращает id клиента
+        :param order_id: id заказа
+        :return: id (int)"""
+        try:
+            with sqlite3.connect(self.db_file) as db:
+                cursor = db.cursor()
+                cursor.execute("SELECT client_id FROM Orders WHERE id = ?", [order_id])
+                result = cursor.fetchone()
+                return False if result is None else int(result[0])
+        except sqlite3.Error as e:
+            print(f"Не удалось получить id клиент: {e}")
+            return False
 
+    def get_order_data_for_cleaner(self, order_id):
+        """возвращает id клиента
+        :param order_id: id заказа
+        :return: id клиента"""
+        try:
+            with sqlite3.connect(self.db_file) as db:
+                cursor = db.cursor()
+                cursor.execute("""SELECT room_count, bathroom_count, fridge, stove, cabinets, dishes, microwave, 
+                clothes, windows, balcony, price, order_time FROM Orders WHERE id = ?""", [order_id])
+                result = cursor.fetchone()
+                return False if result is None else result
+        except sqlite3.Error as e:
+            print(f"Не удалось загрузить данные по заказу: {e}")
+            return False
 
+    def change_order_status(self, order_id, status):
+        """возвращает id клиента
+        :param order_id: id заказа
+        :param status: новый статус заявки
+        :return: True - изменен, False - нет"""
+        try:
+            with sqlite3.connect(self.db_file) as db:
+                cursor = db.cursor()
+                cursor.execute("UPDATE Orders SET status = ? WHERE id = ?", [status, order_id])
+                return cursor.rowcount > 0
+        except sqlite3.Error as e:
+            print(f"Не удалось изменить статус заявки: {e}")
+            return False
 
+    def get_cleaner_reviews(self, cleaner_id):
+        """:param cleaner_id: id клинера
+        :return: список заявок с отзывами"""
+        try:
+            with sqlite3.connect(self.db_file) as db:
+                cursor = db.cursor()
+                cursor.execute("""SELECT Orders.id, Orders.date_time 
+                FROM Orders 
+                JOIN Reviews ON Reviews.order_id = Orders.id
+                WHERE Orders.staff_id = ?""", [cleaner_id])
+                result = cursor.fetchall()
+                return False if result is None else result
+        except sqlite3.Error as e:
+            print(f"Не удалось загрузить отзывы клинера: {e}")
+            return False
 
+    def get_cleaner_review_info(self, order_id):
+        """:param order_id: id заявки
+        :return: данные клиента, текст отзыва"""
+        try:
+            with sqlite3.connect(self.db_file) as db:
+                cursor = db.cursor()
+                cursor.execute("""SELECT Clients.name, Clients.address, Reviews.review_text
+                FROM Clients 
+                JOIN Orders ON Orders.client_id = Clients.id
+                JOIN Reviews ON Reviews.order_id = Orders.id
+                WHERE Orders.id = ?""", [order_id])
+                result = cursor.fetchone()
+                return False if result is None else result
+        except sqlite3.Error as e:
+            print(f"Не удалось загрузить отзывы клинера: {e}")
+            return False
 
+    def get_cleaner_info(self, cleaner_id):
+        """:param cleaner_id: id клинера
+        :return: данные клинера (id, name, phone, hours_week, hours_day, work_schedule(1-доступен к работе, 2 - нет))"""
+        try:
+            with sqlite3.connect(self.db_file) as db:
+                cursor = db.cursor()
+                cursor.execute("SELECT * FROM Staff WHERE id = ?", [cleaner_id])
+                result = cursor.fetchone()
+                return False if result is None else result
+        except sqlite3.Error as e:
+            print(f"Не удалось загрузить данные клинера: {e}")
+            return False
 
-
-
-
-
-
+    def change_cleaner_phone(self, cleaner_id, phone):
+        """изменение номера телефона клинера
+        :param cleaner_id: id клинера
+        :param phone: новый телефон клинера
+        :return: True - изменен, False - нет"""
+        try:
+            with sqlite3.connect(self.db_file) as db:
+                cursor = db.cursor()
+                cursor.execute("UPDATE Staff SET contact_info = ? WHERE id = ?", [phone, cleaner_id])
+                return cursor.rowcount > 0
+        except sqlite3.Error as e:
+            print(f"Не удалось изменить номер телефона клинера: {e}")
+            return False

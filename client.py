@@ -5,12 +5,13 @@ from datetime import date, timedelta, datetime
 from database import DataBase as db
 from telegram_bot_calendar import DetailedTelegramCalendar, LSTEP
 
-
 bot = telebot.TeleBot('6748980136:AAEh6eAhemwrxa-oehIo0JzzWsfoF250pxg')
-# bot = telebot.TeleBot('6480873823:AAFVK_tC7z2srPOv4iSqllRo8yfO5d709vs')
 
-# client data
 client_btns = ['Рассчитать стоимость уборки', 'Мои заказы', 'Мы в соц. сетях', 'Связаться с администратором']
+admin_btns = ['Нераспределенные заявки', 'Заявки в процессе выполнения', 'График работы клинеров', 'Склад', 'Клинеры',
+              'Отзывы', 'Стат. за вчерашний день', 'Стат. по месяцам', 'Заблокировать клиента']
+cleaner_btns = ['Заявки на сегодня', 'Свободные заявки', 'График', 'Мои отзывы', 'Изменить контакный номер',
+                'Связь с администратором']
 social_media = ['Instagram', 'Facebook']
 admin_contact_btns = ['Telegram', 'WhatsApp']
 schedule = ['09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00']
@@ -27,10 +28,7 @@ basic_price = 65
 user_data = {}
 new_cleaner = []
 orders = {}
-
-# admin data
-admin_btns = ['Нераспределенные заявки', 'Заявки в процессе выполнения', 'График работы клинеров', 'Склад', 'Клинеры',
-              'Отзывы', 'Стат. за вчерашний день', 'Стат. по месяцам', 'Заблокировать клиента']
+cleaners_flag = {}
 
 
 @bot.message_handler(commands=['start'])
@@ -40,13 +38,15 @@ def start(message):
     :return: Возвращает клавиатуру Клиент/Админ/Клинер, предлагает регистрацию если новый, шлет подальше если в блэке"""
     if message.text == '/start':
         user_id = message.from_user.id
-        orders[user_id] = {}
-        orders[user_id]['room_number'] = '1'
-        orders[user_id]['bath_number'] = '1'
-        orders[user_id]['price'] = 65
-        orders[user_id]['price_bath'] = 0
-        orders[user_id]['price_room'] = 0
-        orders[user_id]['cleaning_time'] = 3
+        bot.clear_step_handler_by_chat_id(user_id)
+        orders[user_id] = {
+            'room_number': '1',
+            'bath_number': '1',
+            'price': 65,
+            'price_bath': 0,
+            'price_room': 0,
+            'cleaning_time': 3
+        }
         user_name = message.from_user.first_name
         if not db().is_admin(user_id) and not db().is_cleaner(user_id):
             if not db().is_in_black_list(user_id):
@@ -62,7 +62,7 @@ def start(message):
         elif db().is_admin(user_id) and not db().is_cleaner(user_id):
             bot.send_message(message.chat.id, "Панель управления", reply_markup=admin_markup())
         elif db().is_cleaner(user_id) and not db().is_admin(user_id):
-            print('cleaner')
+            bot.send_message(message.chat.id, "Меню", reply_markup=cleaner_menu())
 
 
 def registrator(message):
@@ -225,14 +225,14 @@ def create_calendar(call):
         selected_date = datetime.strptime(str(result), '%Y-%m-%d')
         selected_date_text = selected_date.strftime('%d.%m.%Y')
         if chat_id not in orders:
-            print('нет в заказах')
-            orders[chat_id] = {}
-            orders[chat_id]['room_number'] = '1'
-            orders[chat_id]['bath_number'] = '1'
-            orders[chat_id]['price'] = 65
-            orders[chat_id]['price_bath'] = 0
-            orders[chat_id]['price_room'] = 0
-            orders[chat_id]['cleaning_time'] = 3
+            orders[chat_id] = {
+                'room_number': '1',
+                'bath_number': '1',
+                'price': 65,
+                'price_bath': 0,
+                'price_room': 0,
+                'cleaning_time': 3
+            }
         orders[chat_id]['date'] = selected_date_text
         bot.send_message(chat_id, "Выберите время", reply_markup=cleaning_schedule())
 
@@ -371,6 +371,13 @@ def take_review(message, order_id):
 
 
 # Admin
+def back_to_admin(chat):
+    bot.clear_step_handler_by_chat_id(chat)
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton('Назад', callback_data='admin_back'))
+    return markup
+
+
 def admin_markup():
     """:return: Возвращает кнопки для панели админа"""
     markup = InlineKeyboardMarkup()
@@ -396,7 +403,7 @@ def unsigned_orders():
     return markup
 
 
-def available_cleaners(status):
+def available_cleaners(status, order_id=None, order_time=None):
     """:return: Возвращает кнопки доступных клинеров"""
     markup = InlineKeyboardMarkup()
     cleaners = db().get_list_of_cleaners()
@@ -413,9 +420,11 @@ def available_cleaners(status):
             row.append(InlineKeyboardButton(btn, callback_data=btn))
         markup.row(*row)
         markup.add(InlineKeyboardButton('Меню', callback_data='admin_back'))
-    elif status == 1:
+    elif status == 1 and order_id:
         for idx, cleaner in enumerate(cleaners, start=1):
-            markup.add(InlineKeyboardButton(f"{idx}. {cleaner[1]}", callback_data=f"clnr{cleaner[0]}"))
+            markup.add(InlineKeyboardButton(f"{idx}. {cleaner[1]}",
+                                            callback_data=f"clnr_{order_id}_{cleaner[0]}_{order_time}"))
+        markup.add(InlineKeyboardButton('Назад', callback_data='Нераспределенные заявки'))
     return markup
 
 
@@ -484,13 +493,112 @@ def cleaner_reviews(cleaner_id):
         return cleaners
     for idx, review in enumerate(orders_from_cleaner, start=1):
         markup.add(InlineKeyboardButton(f"{idx}. {review[1]}", callback_data=f"{orders_from_cleaner[0]}review_card"))
-        markup.add(InlineKeyboardButton('Назад', callback_data='admin_back'))
+        markup.add(InlineKeyboardButton('Назад', callback_data='Отзывы'))
     return markup
+
+
+def block_client(message):
+    """:return: Блокировка/Разблокировка клиента"""
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton('Назад', callback_data='admin_back'))
+    if message.text.isdigit():
+        client_to_change = int(message.text)
+        if db().block_client(client_to_change):
+            clients_list = db().get_clients_list()
+            bot.send_message(message.from_user.id, f"Клиент ID: {client_to_change} заблокирован/разблокирован! ✅\n")
+            bot.send_message(message.from_user.id, f"Укажите ID клиента для блокировки ⬇\n\n{clients_list}",
+                             reply_markup=markup)
+            bot.register_next_step_handler(message, block_client)
+    else:
+        clients_list = db().get_clients_list()
+        bot.send_message(message.chat.id, f"""⚠️ Введен некорректный ID пользователя! ⚠️\nПопробуйте еще раз!\n
+{clients_list}""", reply_markup=markup)
+        bot.register_next_step_handler(message, block_client)
+
+
+# Cleaner
+def cleaner_menu():
+    """:return: Возвращает кнопки для панели Клинера"""
+    markup = InlineKeyboardMarkup()
+    for btn in cleaner_btns:
+        if btn == 'График':
+            link = 'https://docs.google.com/spreadsheets/d/1IQv8m_q5zWAPLzvX33kUVwcOHvH2ie7w/edit?usp=sharing&ouid=103860963669432207618&rtpof=true&sd=true'
+            markup.add(InlineKeyboardButton(btn, url=link))
+        if btn == 'Связь с администратором':
+            tg_link = f'tg://resolve?domain=cleanny_by'
+            markup.add(InlineKeyboardButton(btn, url=tg_link))
+        else:
+            markup.add(InlineKeyboardButton(btn, callback_data=btn))
+    return markup
+
+
+def back_to_cleaner(chat):
+    bot.clear_step_handler_by_chat_id(chat)
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton('Назад', callback_data='back_to_cleaner'))
+    return markup
+
+
+def cleaner_orders_markup(cleaner_id):
+    cleaner_orders = db().orders_for_cleaner(cleaner_id)
+    markup = InlineKeyboardMarkup()
+    if cleaner_orders:
+        for idx, order in enumerate(cleaner_orders, start=1):
+            numb, ord_time = order[0], order[1][-5:]
+            status = None
+            if str(numb) not in cleaners_flag:
+                cleaners_flag[str(numb)] = 'Уборка не началась'
+                status = 'Не начато'
+            else:
+                if cleaners_flag[str(numb)] == 'Уборка не началась':
+                    status = 'Не начато'
+                elif cleaners_flag[str(numb)] == 'Идет уборка':
+                    status = 'Идет уборка'
+            markup.add(InlineKeyboardButton(f"{idx}. Заявка № {numb} на {ord_time} {status}", callback_data=f'id_ord{order[0]}'))
+    else:
+        bot.send_message(cleaner_id, 'Нет активных заявок! 👀\nОбратись к администратору, если они должны быть!',
+                         reply_markup=client_menu())
+    markup.add(InlineKeyboardButton('Назад', callback_data='back_to_cleaner'))
+    return markup
+
+
+def current_order_markup(order_id, in_run):
+    markup = InlineKeyboardMarkup()
+    if in_run == 'yes':
+        markup.add(InlineKeyboardButton('Закончить уборку', callback_data=f'{order_id}_Заявки на сегодня'))
+    elif in_run == 'no':
+        markup.add(InlineKeyboardButton('Начать уборку', callback_data=f'{order_id}_Заявки на сегодня'))
+    markup.add(InlineKeyboardButton("Назад", callback_data='back_to_cleaner'))
+    return markup
+
+
+def clnr_reviews(cleaner_id):
+    """:return: Возвращает кнопки отзывов Клинера(5 последних)"""
+    markup = InlineKeyboardMarkup()
+    reviews = db().get_cleaner_reviews(cleaner_id)
+    for idx, review in enumerate(reviews[:5], start=1):
+        markup.add(InlineKeyboardButton(f'{idx}. Заказ № {review[0]} от {review[1]}', callback_data=f'{review[0]}rev'))
+    markup.add(InlineKeyboardButton("Назад", callback_data='back_to_cleaner'))
+    return markup
+
+
+def change_cleaner_phone(message):
+    new_phone = message.text
+    cleaner_id = int(message.chat.id)
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("Отмена", callback_data='back_to_cleaner'))
+    if db().change_cleaner_phone(cleaner_id, new_phone):
+        bot.send_message(cleaner_id, f"Номер телефона успешно изменен!\nНовый номер телефона {new_phone}",
+                         reply_markup=cleaner_menu())
+        return
+    else:
+        bot.send_message(cleaner_id, f"Что-то пошло не так! 😔\n Введите номер еще раз", reply_markup=markup)
+        bot.register_next_step_handler(message, change_cleaner_phone)
 
 
 @bot.callback_query_handler(func=lambda call: True)
 def client_panel(call):
-    # print(call.data)
+    print(call.data)
     user_id = call.from_user.id
     chat = call.message.chat.id
     if call.data == 'menu':
@@ -761,13 +869,25 @@ def client_panel(call):
                 def_values[key] = orders[user_id][key]
         discount = None
         price = orders[user_id]['price']
+        order_time = orders[user_id]['cleaning_time']
 
         db().add_data_to_orders([order_date, status, date_time_for_order, address, client_id, staff_id, room_count,
                                  bathroom_count, def_values['fridge'], def_values['stove'], def_values['cabinets'],
                                  def_values['dishes'], def_values['microwave'], def_values['clothes'],
-                                 def_values['windows'], def_values['balcony'], discount, price])
+                                 def_values['windows'], def_values['balcony'], discount, price, order_time])
         bot.send_message(chat, """Ваша заявка принята!\nВ ближайшее время с Вами свяжется наш администратор,
 для подтверждения заказа, либо Вы получите сообщение о подтверждении в Телеграм.""", reply_markup=markup)
+
+    if call.data == 'cancel_order':
+        orders[user_id] = {
+            'room_number': '1',
+            'bath_number': '1',
+            'price': 65,
+            'price_bath': 0,
+            'price_room': 0,
+            'cleaning_time': 3
+        }
+        bot.send_message(chat, """Ваша заявка отменена!\n\nМеню""", reply_markup=client_menu())
 
     if call.data == 'Мои заказы':
         orders_markup = client_orders(user_id)
@@ -816,14 +936,13 @@ def client_panel(call):
 
     # admin
     if call.data == 'admin_back':
+        bot.clear_step_handler_by_chat_id(chat)
         bot.send_message(chat, "Панель управления", reply_markup=admin_markup())
 
     if call.data == 'Нераспределенные заявки':
         free_orders_markup = unsigned_orders()
         if isinstance(free_orders_markup, str):
-            markup = InlineKeyboardMarkup()
-            markup.add(InlineKeyboardButton('Назад', callback_data='admin_back'))
-            bot.send_message(chat, free_orders_markup, reply_markup=markup)
+            bot.send_message(chat, free_orders_markup, reply_markup=back_to_admin(chat))
         else:
             bot.send_message(chat, f"Нераспределенные заявки:\n\n", reply_markup=free_orders_markup)
 
@@ -839,24 +958,24 @@ def client_panel(call):
 Клиент:\n{client}\nКомнаты: {ord_data[7]}\nСан.узлы: {ord_data[8]}\nВнутри холодильника: {ord_data[9]}
 Внутри духовки: {ord_data[10]}\nВнутри кухонных шкафов: {ord_data[11]}\nПомоем посуду: {ord_data[12]}
 Внутри микроволновки: {ord_data[13]}\nПогладим белье: {ord_data[14]}\nПомоем окна: {ord_data[15]}
-Уберем на балконе: {ord_data[16]}""", reply_markup=available_cleaners(1))
+Уберем на балконе: {ord_data[16]}""", reply_markup=available_cleaners(1, order_id, ord_data[-1]))
 
-    if call.data[:7] == 'cleaner':
-        db().make_cleaner_to_order(call.data[7:])
+    if call.data[:5] == 'clnr_':
+        call_data = call.data.split('_')
+        cleaner_id = int(call_data[2])
+        order_time = float(call_data[3])
+        order_id = int(call_data[1])
+        db().make_cleaner_to_order(order_id, cleaner_id, order_time)
         free_orders_markup = unsigned_orders()
         if isinstance(free_orders_markup, str):
-            markup = InlineKeyboardMarkup()
-            markup.add(InlineKeyboardButton('Назад', callback_data='admin_back'))
-            bot.send_message(chat, free_orders_markup, reply_markup=markup)
+            bot.send_message(chat, free_orders_markup, reply_markup=back_to_admin(chat))
         else:
-            bot.send_message(chat, f"Нераспределенные заявки:\n\n", reply_markup=free_orders_markup)
+            bot.send_message(chat, f"Клинер назначе\nНераспределенные заявки:\n\n", reply_markup=free_orders_markup)
 
     if call.data == 'Заявки в процессе выполнения':
         current_orders_markup = orders_in_run()
         if isinstance(current_orders_markup, str):
-            markup = InlineKeyboardMarkup()
-            markup.add(InlineKeyboardButton('Назад', callback_data='admin_back'))
-            bot.send_message(chat, current_orders_markup, reply_markup=markup)
+            bot.send_message(chat, current_orders_markup, reply_markup=back_to_admin(chat))
         else:
             bot.send_message(chat, f"Заявки в процессе выполнения:\n\n", reply_markup=current_orders_markup)
 
@@ -921,28 +1040,99 @@ def client_panel(call):
 
     if call.data[-7:] == 'reviews':
         cleaner_id = call.data[:-7]
-        bot.send_message(chat, "Выберите заявку:", reply_markup=cleaner_reviews(cleaner_id))
+        markup_cln = cleaner_reviews(cleaner_id)
+        if isinstance(markup_cln, str):
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton('Назад', callback_data='Отзывы'))
+            bot.send_message(chat, markup_cln, reply_markup=markup)
+        else:
+            bot.send_message(chat, "Выберите заявку:", reply_markup=markup_cln)
 
     if call.data[-11:] == 'review_card':
         order_id = int(call.data[1:-33])
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton('Удалить отзыв', callback_data='delete_review'))
-        markup.add(InlineKeyboardButton('Назад', callback_data='admin_back'))
         card = db().get_cleaner_review_card(order_id)
+        if not card:
+            bot.send_message(chat, f"""Произошла ошибка, попробуйте еще раз!""", reply_markup=admin_markup())
+            return
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton('Удалить отзыв', callback_data=f'{order_id} delete_review {card[-2]}'))
+        markup.add(InlineKeyboardButton('Назад', callback_data=f'{card[-2]}reviews'))
         bot.send_message(chat, f"""Карточка заказа № {order_id}:\nКлиент: {card[0]}\nТелефон: {card[1]}
-Адрес:\n{card[2]}\n\nОтзыв:\n{card[3]}""", reply_markup=markup)
+Адрес:\n{card[2]}\n\nОтзыв:\n{card[-1]}""", reply_markup=markup)
 
-        # ЗАКОНЧИЛ ПОСЛЕ СОЗДАНИЯ КНОПКИ УДАЛИТЬ ОТЗЫВ, КНОПКА НЕ ОБРАБОТАНА
+    if 'delete_review' in call.data.split():
+        review_id = int(call.data.split()[0])
+        db().delete_review(review_id)
+        bot.send_message(chat, "Отзыв удален!", reply_markup=cleaner_reviews(int(call.data.split()[-1])))
+
+    if call.data == 'Заблокировать клиента':
+        clients_list = db().get_clients_list()
+        bot.send_message(chat, f"Укажите ID для блокировки ⬇\n\n{clients_list}", reply_markup=back_to_admin(chat))
+        bot.register_next_step_handler(call.message, block_client)
+
+    # cleaner
+    if call.data == 'back_to_cleaner':
+        bot.clear_step_handler_by_chat_id(chat)
+        bot.send_message(chat, "Меню", reply_markup=cleaner_menu())
+
+    if call.data == 'Заявки на сегодня':
+        cleaner_orders = db().orders_for_cleaner(user_id)
+        if not cleaner_orders:
+            bot.send_message(chat, 'Нет активных заявок! 👀\nОбратись к администратору, если они должны быть!',
+                             reply_markup=back_to_cleaner(user_id))
+        else:
+            bot.send_message(chat, "Нажми на заявку, чтобы посмотреть детали ⬇",
+                             reply_markup=cleaner_orders_markup(user_id))
+
+    if call.data[:6] == 'id_ord':
+        ord_id = int(call.data[6:])
+        clnt_id = db().get_client_id(ord_id)
+        clnt_data = db().get_client_data(clnt_id)[1:]
+        cur_order_data = db().get_order_data_for_cleaner(ord_id)
+        order_details = [i if i != 0 else 'Нет' for i in cur_order_data]
+        if call.data[6:] not in cleaners_flag or cleaners_flag[call.data[6:]] == 'Уборка не началась':
+            cleaners_flag[call.data[6:]] = 'Уборка не началась'
+            markup_id_ord = current_order_markup(ord_id, 'no')
+        elif cleaners_flag[call.data[6:]] == 'Идет уборка':
+            markup_id_ord = current_order_markup(ord_id, 'yes')
+
+        bot.send_message(chat, f"""Заявка № {ord_id} ({order_details[11]} часов)\n\nИмя: {clnt_data[0]}
+Телефон: {clnt_data[1]}\nАдрес: {clnt_data[2]}\n\nКоличество комнат: {order_details[0]}
+Количество сан. узлов: {order_details[1]}\nВнутри холодильника: {order_details[2]}\nВнутри духовки: {order_details[3]}
+Внутри кухонных шкафов: {order_details[4]}\nМытье посуды: {order_details[5]}\nВнутри микроволновки: {order_details[6]}
+Погладить белье: {order_details[7]}\nМытье окон: {order_details[8]}\nУбрать на балконе: {order_details[9]}\n
+К оплате: {order_details[10]}""", reply_markup=markup_id_ord)
+
+    if call.data[-18:] == '_Заявки на сегодня':
+        if str(call.data[:-18]) in cleaners_flag:
+            if cleaners_flag[str(call.data[:-18])] == 'Уборка не началась':
+                cleaners_flag[str(call.data[:-18])] = 'Идет уборка'
+                db().change_order_status(call.data[:-18], 'Идет уборка')
+
+            elif cleaners_flag[str(call.data[:-18])] == 'Идет уборка':
+                cleaners_flag[str(call.data[:-18])] = 'Уборка завершена'
+                db().change_order_status(call.data[:-18], 'Уборка завершена')
+            bot.send_message(chat, "Нажми на заявку, чтобы посмотреть детали ⬇",
+                                 reply_markup=cleaner_orders_markup(user_id))
+
+    if call.data[-18:] == 'Мои отзывы':
+        bot.send_message(chat, "Мои отзывы", reply_markup=clnr_reviews(user_id))
+
+    if call.data[-3:] == 'rev':
+        rev_card = db().get_cleaner_review_info(int(call.data[:-3]))
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("Назад", callback_data='Мои отзывы'))
+        bot.send_message(chat, f"""Отзыв по заявке № {call.data[:-3]}\n\n Клиент:\n{rev_card[0]}\nАдрес:
+{rev_card[1]}\n\nОтзыв:\n{rev_card[2]}""", reply_markup=markup)
+
+    if call.data == 'Изменить контакный номер':
+        cleaner_phone = db().get_cleaner_info(user_id)[2]
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("Отмена", callback_data='back_to_cleaner'))
+        bot.send_message(chat, f"""Ваш текущий номер телефона\n{cleaner_phone}\n\nДля ввидите новый номер телефона,
+чтобы его изменить, либо нажмите 'Отмена'""", reply_markup=markup)
+        bot.register_next_step_handler(call.message, change_cleaner_phone)
 
 
 print('ready')
 bot.polling(none_stop=True)
-
-
-# db().add_admin(1924589846, 'Олег', '+37529 821 89 14')
-# db().add_cleaner(111, 'Долматов Алексей', "+37529 171 83 54", 18, 1)
-# db().add_cleaner(222, 'Вакуленко Василий', "+37533 374 32 97", 22, 1)
-# db().add_cleaner(333, 'Киркоров Филипп', "+37544 876 83 23", 24, 1)
-# db().add_cleaner(444, 'Михайлов Станислав', "+37529 573 11 35", 17, 1)
-# db().add_cleaner(555, 'Лепс Григорий', "+37529 221 37 90", 5, 1)
-
